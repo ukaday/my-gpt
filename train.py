@@ -1,9 +1,10 @@
 import torch
 from torch.nn import functional
+torch.autograd.set_detect_anomaly(True)
 
 batch_size = 32
 block_size = 8
-max_iters = 5000
+max_iters = 3000
 eval_interval = 300
 learning_rate = 1e-3
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -46,10 +47,29 @@ class MultiHeadAttention(torch.nn.Module):
 class FeedForward(torch.nn.Module):
     def __init__(self, num_embed):
         super().__init__()
-        self.net = torch.nn.Sequential(torch.nn.Linear(num_embed, num_embed), torch.nn.ReLU())
+        self.net = torch.nn.Sequential(
+            torch.nn.Linear(num_embed, 4 * num_embed),
+            torch.nn.ReLU(),
+            torch.nn.Linear(4 * num_embed, num_embed),
+        )
 
     def forward(self, x):
         return self.net(x)
+
+
+class Block(torch.nn.Module):
+    def __init__(self, num_embed, num_heads):
+        super().__init__()
+        head_size = num_embed // num_heads
+        self.self_attention = MultiHeadAttention(num_heads, head_size)
+        self.feed_forward = FeedForward(num_embed)
+        self.layer_norm1 = torch.nn.LayerNorm(num_embed)
+        self.layer_norm2 = torch.nn.LayerNorm(num_embed)
+
+    def forward(self, x):
+        x += self.self_attention(self.layer_norm1(x))
+        x += self.feed_forward(self.layer_norm2(x))
+        return x
 
 
 class BLM(torch.nn.Module):
@@ -59,6 +79,8 @@ class BLM(torch.nn.Module):
         self.position_embedding_table = torch.nn.Embedding(block_size, num_embed)
         self.self_attention_heads = MultiHeadAttention(4, num_embed // 4)  # 4 heads and 32 / 4 head size
         self.feed_forward = FeedForward(num_embed)
+        # self.blocks = torch.nn.Sequential(
+        # )
         self.language_modeling_head = torch.nn.Linear(num_embed, vocab_size)
 
     def forward(self, inputs, targets=None):
