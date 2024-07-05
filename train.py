@@ -8,6 +8,7 @@ max_iters = 3000
 eval_interval = 300
 learning_rate = 1e-3
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
+print(device)
 eval_iters = 200
 num_embed = 32
 
@@ -38,10 +39,11 @@ class MultiHeadAttention(torch.nn.Module):
     def __init__(self, num_heads, head_size):
         super().__init__()
         self.heads = torch.nn.ModuleList([Head(head_size) for x in range(num_heads)])
+        self.projection = torch.nn.Linear(num_embed, num_embed)
 
     def forward(self, x):
         concatenation = torch.cat([head(x) for head in self.heads], dim=-1)
-        return concatenation
+        return self.projection(concatenation)
 
 
 class FeedForward(torch.nn.Module):
@@ -67,8 +69,8 @@ class Block(torch.nn.Module):
         self.layer_norm2 = torch.nn.LayerNorm(num_embed)
 
     def forward(self, x):
-        x += self.self_attention(self.layer_norm1(x))
-        x += self.feed_forward(self.layer_norm2(x))
+        x = x + self.self_attention(self.layer_norm1(x))
+        x = x + self.feed_forward(self.layer_norm2(x))
         return x
 
 
@@ -77,10 +79,14 @@ class BLM(torch.nn.Module):
         super().__init__()
         self.token_embedding_table = torch.nn.Embedding(vocab_size, num_embed)
         self.position_embedding_table = torch.nn.Embedding(block_size, num_embed)
-        self.self_attention_heads = MultiHeadAttention(4, num_embed // 4)  # 4 heads and 32 / 4 head size
-        self.feed_forward = FeedForward(num_embed)
-        # self.blocks = torch.nn.Sequential(
-        # )
+        # self.self_attention_heads = MultiHeadAttention(4, num_embed // 4)  # 4 heads and 32 / 4 head size
+        # self.feed_forward = FeedForward(num_embed)
+        self.blocks = torch.nn.Sequential(
+            Block(num_embed, num_heads=4),
+            Block(num_embed, num_heads=4),
+            Block(num_embed, num_heads=4),
+            torch.nn.LayerNorm(num_embed)
+        )
         self.language_modeling_head = torch.nn.Linear(num_embed, vocab_size)
 
     def forward(self, inputs, targets=None):
@@ -89,8 +95,9 @@ class BLM(torch.nn.Module):
         token_embeddings = self.token_embedding_table(inputs)  # (B,T,num_embed)
         position_embeddings = self.position_embedding_table(torch.arange(t, device=device))  # (T, C)
         x = token_embeddings + position_embeddings
-        x = self.self_attention_heads(x)
-        x = self.feed_forward(x)
+        # x = self.self_attention_heads(x)
+        # x = self.feed_forward(x)
+        x = self.blocks(x)
         logits = self.language_modeling_head(x)  # (B,T, vocab_size)
 
         if targets is None:
