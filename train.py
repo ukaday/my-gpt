@@ -2,15 +2,17 @@ import torch
 from torch.nn import functional
 torch.autograd.set_detect_anomaly(True)
 
-batch_size = 32
-block_size = 8
-max_iters = 3000
-eval_interval = 300
-learning_rate = 1e-3
+batch_size = 64
+block_size = 256
+max_iters = 5000
+eval_interval = 500
+learning_rate = 1e-4
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
-print(device)
 eval_iters = 200
-num_embed = 32
+num_embed = 384
+num_heads = 6
+num_layers = 4
+dropout = 0.2
 
 
 class Head(torch.nn.Module):
@@ -20,6 +22,7 @@ class Head(torch.nn.Module):
         self.query = torch.nn.Linear(num_embed, head_size, bias=False)
         self.value = torch.nn.Linear(num_embed, head_size, bias=False)
         self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
+        self.dropout = torch.nn.Dropout(dropout)
 
     def forward(self, x):
         b, t, c = x.shape
@@ -29,6 +32,7 @@ class Head(torch.nn.Module):
         weights = q @ k.transpose(-2, -1) * k.shape[-1] ** -0.5  # (B, T, hs) @ (B, hs, T) -> (B, T, T)
         weights = weights.masked_fill(self.tril[:t, :t] == 0, float('-inf'))  # (B, T, T)
         weights = functional.softmax(weights, dim=-1)  # (B, T, T)
+        weights = self.dropout(weights)
      
         v = self.value(x)  # (B,T,hs)
         out = weights @ v  # (B, T, T) @ (B, T, hs) -> (B, T, hs)
@@ -40,10 +44,11 @@ class MultiHeadAttention(torch.nn.Module):
         super().__init__()
         self.heads = torch.nn.ModuleList([Head(head_size) for x in range(num_heads)])
         self.projection = torch.nn.Linear(num_embed, num_embed)
+        self.dropout = torch.nn.Dropout(dropout)
 
     def forward(self, x):
         concatenation = torch.cat([head(x) for head in self.heads], dim=-1)
-        return self.projection(concatenation)
+        return self.dropout(self.projection(concatenation))
 
 
 class FeedForward(torch.nn.Module):
@@ -53,6 +58,7 @@ class FeedForward(torch.nn.Module):
             torch.nn.Linear(num_embed, 4 * num_embed),
             torch.nn.ReLU(),
             torch.nn.Linear(4 * num_embed, num_embed),
+            torch.nn.Dropout(dropout)
         )
 
     def forward(self, x):
@@ -81,12 +87,8 @@ class BLM(torch.nn.Module):
         self.position_embedding_table = torch.nn.Embedding(block_size, num_embed)
         # self.self_attention_heads = MultiHeadAttention(4, num_embed // 4)  # 4 heads and 32 / 4 head size
         # self.feed_forward = FeedForward(num_embed)
-        self.blocks = torch.nn.Sequential(
-            Block(num_embed, num_heads=4),
-            Block(num_embed, num_heads=4),
-            Block(num_embed, num_heads=4),
-            torch.nn.LayerNorm(num_embed)
-        )
+        self.blocks = torch.nn.Sequential(*[Block(num_embed, num_heads) for x in range(num_layers)])
+        self.layer_norm = torch.nn.LayerNorm(num_embed)
         self.language_modeling_head = torch.nn.Linear(num_embed, vocab_size)
 
     def forward(self, inputs, targets=None):
@@ -98,6 +100,7 @@ class BLM(torch.nn.Module):
         # x = self.self_attention_heads(x)
         # x = self.feed_forward(x)
         x = self.blocks(x)
+        x = self.layer_norm(x)
         logits = self.language_modeling_head(x)  # (B,T, vocab_size)
 
         if targets is None:
@@ -178,4 +181,7 @@ for i in range(max_iters):
     optimizer.step()
 
 context = torch.zeros((1, 1), dtype=torch.long, device=device)
-print(decode(gpu_model.generate(context, max_new_tokens=500)[0].tolist()))
+
+with open('output.txt', 'w', encoding='utf-8') as file:
+    file.write(decode(gpu_model.generate(context, max_new_tokens=1000)[0].tolist()))
+
