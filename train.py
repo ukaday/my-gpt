@@ -11,7 +11,7 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 eval_iters = 200
 num_embed = 384
 num_heads = 6
-num_layers = 4
+num_layers = 6
 dropout = 0.2
 
 
@@ -121,6 +121,9 @@ class BLM(torch.nn.Module):
             probs = functional.softmax(logits, dim=-1)  # (B, C)
             input_next = torch.multinomial(probs, num_samples=1)  # (B, 1)
             inputs = torch.cat((inputs, input_next), dim=1)  # (B, T+1)
+
+            if i % 50 == 0:
+                print(f"wrote {i}th character")
         return inputs
 
 
@@ -181,6 +184,8 @@ for i in range(max_iters):
     optimizer.step()
 
 context = torch.zeros((1, 1), dtype=torch.long, device=device)
+
+print("writing to file")
 
 with open('output.txt', 'w', encoding='utf-8') as file:
     file.write(decode(gpu_model.generate(context, max_new_tokens=1000)[0].tolist()))
